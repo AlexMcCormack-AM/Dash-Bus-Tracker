@@ -1,0 +1,5 @@
+flask
+requests
+protobuf
+gtfs-realtime-bindings
+python-dotenv
