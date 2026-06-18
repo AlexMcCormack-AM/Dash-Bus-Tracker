@@ -244,6 +244,8 @@ def alert_worker():
 
             if alert and not alert["fired"]:
                 buses = get_upcoming_buses(alert["stop_id"])
+                print(f"Alert check: looking for route={alert['route_id']} headsign='{alert['headsign']}' threshold={alert['threshold']}")
+                print(f"  Found buses: {[(b['route'], b['headsign'], b['mins']) for b in buses]}")
                 for bus in buses:
                     if bus["route"] == alert["route_id"] and bus["headsign"] == alert["headsign"]:
                         if bus["mins"] <= alert["threshold"] + 0.9:
