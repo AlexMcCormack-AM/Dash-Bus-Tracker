@@ -2,7 +2,10 @@ import time
 import io
 import csv
 import zipfile
+import smtplib
+import threading
 import requests
+from email.mime.text import MIMEText
 from flask import Flask, jsonify, render_template_string, request
 from google.transit import gtfs_realtime_pb2
 from dotenv import load_dotenv
@@ -13,7 +16,14 @@ load_dotenv()
 
 app = Flask(__name__)
 
-API_KEY = os.getenv("SWIFTLY_API_KEY", "4af18b965e8a21f6015686f2f208f95f")
+API_KEY    = os.getenv("SWIFTLY_API_KEY", "4af18b965e8a21f6015686f2f208f95f")
+SMS_GATEWAY       = os.getenv("SMS_GATEWAY", "")
+GMAIL_USER        = os.getenv("GMAIL_USER", "")
+GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD", "")
+
+# ── Active alert (one at a time) ─────────────────────────────────────────────
+_alert_lock = threading.Lock()
+_active_alert = None  # {stop_id, route_id, headsign, threshold, fired}
 
 # ── GTFS data (loaded once at startup) ──────────────────────────────────────
 
@@ -178,6 +188,77 @@ def api_buses():
         return jsonify({"error": str(e)}), 500
 
 
+# ── SMS ──────────────────────────────────────────────────────────────────────
+
+def send_text(message):
+    if not GMAIL_USER or not GMAIL_APP_PASSWORD or not SMS_GATEWAY:
+        print(f"[SMS skipped — no credentials]: {message}")
+        return
+    try:
+        msg = MIMEText(message)
+        msg["From"] = GMAIL_USER
+        msg["To"] = SMS_GATEWAY
+        msg["Subject"] = ""
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
+            server.send_message(msg)
+        print(f"Text sent: {message}")
+    except Exception as e:
+        print(f"SMS error: {e}")
+
+
+# ── Alert endpoints ───────────────────────────────────────────────────────────
+
+@app.route("/api/alert", methods=["POST"])
+def set_alert():
+    global _active_alert
+    data = request.json
+    with _alert_lock:
+        _active_alert = {
+            "stop_id":   data["stop_id"],
+            "route_id":  data["route_id"],
+            "headsign":  data["headsign"],
+            "threshold": int(data["threshold"]),
+            "fired":     False,
+        }
+    print(f"Alert set: Route {data['route_id']} at stop {data['stop_id']} within {data['threshold']} min")
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/alert", methods=["DELETE"])
+def cancel_alert():
+    global _active_alert
+    with _alert_lock:
+        _active_alert = None
+    return jsonify({"status": "ok"})
+
+
+# ── Background alert thread ───────────────────────────────────────────────────
+
+def alert_worker():
+    global _active_alert
+    while True:
+        try:
+            with _alert_lock:
+                alert = dict(_active_alert) if _active_alert else None
+
+            if alert and not alert["fired"]:
+                buses = get_upcoming_buses(alert["stop_id"])
+                for bus in buses:
+                    if bus["route"] == alert["route_id"] and bus["headsign"] == alert["headsign"]:
+                        if bus["mins"] <= alert["threshold"]:
+                            stop_name = _stop_names.get(alert["stop_id"], alert["stop_id"])
+                            send_text(f"Route {bus['route']} is {int(bus['mins'])} min away at {stop_name}")
+                            with _alert_lock:
+                                if _active_alert:
+                                    _active_alert["fired"] = True
+                            break
+        except Exception as e:
+            print(f"Alert worker error: {e}")
+
+        time.sleep(30)
+
+
 @app.route("/")
 def index():
     return render_template_string(HTML)
@@ -300,16 +381,64 @@ HTML = """
       margin-top: 6px;
     }
 
-    /* Threshold */
-    .threshold-row {
-      display: flex;
+    /* Active alert banner */
+    .alert-banner {
+      background: #1e3a5f;
+      border: 1px solid #3b82f6;
+      border-radius: 12px;
+      padding: 12px 16px;
+      margin-bottom: 16px;
+      display: none;
       align-items: center;
       justify-content: space-between;
-      margin-bottom: 6px;
+      font-size: 0.85rem;
     }
-    .threshold-label { font-size: 0.8rem; color: #64748b; }
-    .threshold-val { font-size: 0.9rem; font-weight: 700; color: #3b82f6; }
-    input[type=range] { width: 100%; accent-color: #3b82f6; margin-bottom: 20px; }
+    .alert-banner.active { display: flex; }
+    .alert-banner-text { color: #93c5fd; }
+    .alert-banner-text strong { color: #f1f5f9; display: block; font-size: 0.9rem; }
+    .cancel-alert {
+      background: none; border: none; color: #64748b;
+      font-size: 1.1rem; cursor: pointer; padding: 4px;
+    }
+
+    /* Modal overlay */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.7);
+      z-index: 100;
+      align-items: flex-end;
+      justify-content: center;
+    }
+    .modal-overlay.open { display: flex; }
+    .modal {
+      background: #1e293b;
+      border-radius: 20px 20px 0 0;
+      padding: 24px 20px 40px;
+      width: 100%;
+      max-width: 480px;
+    }
+    .modal-title { font-size: 1.1rem; font-weight: 700; margin-bottom: 4px; }
+    .modal-sub { font-size: 0.8rem; color: #64748b; margin-bottom: 24px; }
+    .modal-threshold-row {
+      display: flex; align-items: center;
+      justify-content: space-between; margin-bottom: 8px;
+    }
+    .modal-threshold-label { font-size: 0.9rem; color: #94a3b8; }
+    .modal-threshold-val { font-size: 1rem; font-weight: 700; color: #3b82f6; }
+    input[type=range] { width: 100%; accent-color: #3b82f6; margin-bottom: 24px; }
+    .set-alert-btn {
+      display: block; width: 100%; padding: 15px;
+      background: #3b82f6; color: white; border: none;
+      border-radius: 14px; font-size: 1rem; font-weight: 700; cursor: pointer;
+    }
+    .set-alert-btn:active { background: #2563eb; }
+    .cancel-modal-btn {
+      display: block; width: 100%; padding: 13px; margin-top: 10px;
+      background: #334155; color: #94a3b8; border: none;
+      border-radius: 14px; font-size: 0.9rem; cursor: pointer;
+    }
 
     .section-label {
       font-size: 0.7rem;
@@ -359,15 +488,32 @@ HTML = """
 
 <!-- Screen 4: Arrivals -->
 <div class="screen" id="screen-arrivals">
-  <div class="threshold-row">
-    <span class="threshold-label">Alert threshold</span>
-    <span class="threshold-val" id="threshold-val">10 min</span>
+  <div class="alert-banner" id="alert-banner">
+    <div class="alert-banner-text">
+      <strong id="alert-banner-title">Alert active</strong>
+      <span id="alert-banner-sub"></span>
+    </div>
+    <button class="cancel-alert" onclick="cancelAlert()">✕</button>
   </div>
-  <input type="range" id="threshold" min="3" max="30" value="10" step="1">
-  <div class="section-label">Upcoming buses</div>
+  <div class="section-label">Tap a bus to set an alert</div>
   <div id="buses"></div>
   <div class="updated" id="updated"></div>
   <button class="refresh-btn" onclick="loadBuses()">Refresh</button>
+</div>
+
+<!-- Alert modal -->
+<div class="modal-overlay" id="modal-overlay" onclick="closeModal(event)">
+  <div class="modal">
+    <div class="modal-title" id="modal-title">Set alert</div>
+    <div class="modal-sub" id="modal-sub"></div>
+    <div class="modal-threshold-row">
+      <span class="modal-threshold-label">Alert me when within</span>
+      <span class="modal-threshold-val" id="modal-threshold-val">10 min</span>
+    </div>
+    <input type="range" id="modal-threshold" min="3" max="30" value="10" step="1">
+    <button class="set-alert-btn" onclick="confirmAlert()">Set Alert</button>
+    <button class="cancel-modal-btn" onclick="closeModal()">Cancel</button>
+  </div>
 </div>
 
 <script>
@@ -474,18 +620,13 @@ HTML = """
 
   // ── Screen 4: Arrivals ──────────────────────────────────────────────────
 
-  const slider = document.getElementById('threshold');
-  slider.addEventListener('input', () => {
-    alertThreshold = parseInt(slider.value);
-    document.getElementById('threshold-val').textContent = alertThreshold + ' min';
-    renderBuses(lastBuses);
-  });
-
   let lastBuses = [];
+  let activeAlert = null;   // { trip_id, route, headsign, threshold }
+  let pendingBus = null;    // bus being configured in modal
 
   function minsClass(m) {
     if (m <= 5) return 'urgent';
-    if (m <= alertThreshold) return 'soon';
+    if (m <= 10) return 'soon';
     return 'ok';
   }
 
@@ -500,13 +641,14 @@ HTML = """
     container.innerHTML = buses.map(b => {
       const m = Math.round(b.mins);
       const cls = minsClass(b.mins);
-      const isAlert = b.mins <= alertThreshold;
-      return `<div class="bus-card ${isAlert ? 'alert-match' : ''}">
+      const isAlerted = activeAlert && activeAlert.trip_id === b.trip_id;
+      return `<div class="bus-card ${isAlerted ? 'alert-match' : ''}" onclick="openAlertModal(${JSON.stringify(b).replace(/"/g,'&quot;')})">
         <div class="bus-top">
           <div class="route-badge" style="background:${color}">Route ${b.route}</div>
           <div class="mins ${cls}">${m}<span>min</span></div>
         </div>
         ${b.headsign ? `<div class="headsign">toward ${b.headsign}</div>` : ''}
+        ${isAlerted ? `<div class="headsign" style="color:#93c5fd;margin-top:4px">🔔 Alert set — ${activeAlert.threshold} min</div>` : ''}
       </div>`;
     }).join('');
   }
@@ -524,6 +666,65 @@ HTML = """
     }
   }
 
+  // ── Alert modal ──────────────────────────────────────────────────────────
+
+  function openAlertModal(bus) {
+    pendingBus = bus;
+    document.getElementById('modal-title').textContent = `Route ${bus.route}`;
+    document.getElementById('modal-sub').textContent = bus.headsign ? `toward ${bus.headsign}` : '';
+    const slider = document.getElementById('modal-threshold');
+    slider.value = activeAlert ? activeAlert.threshold : 10;
+    document.getElementById('modal-threshold-val').textContent = slider.value + ' min';
+    document.getElementById('modal-overlay').classList.add('open');
+  }
+
+  function closeModal(e) {
+    if (e && e.target !== document.getElementById('modal-overlay')) return;
+    document.getElementById('modal-overlay').classList.remove('open');
+    pendingBus = null;
+  }
+
+  document.getElementById('modal-threshold').addEventListener('input', function() {
+    document.getElementById('modal-threshold-val').textContent = this.value + ' min';
+  });
+
+  async function confirmAlert() {
+    if (!pendingBus) return;
+    const threshold = parseInt(document.getElementById('modal-threshold').value);
+    activeAlert = {
+      trip_id: pendingBus.trip_id,
+      route: pendingBus.route,
+      headsign: pendingBus.headsign,
+      threshold,
+    };
+
+    // Register alert server-side
+    await fetch('/api/alert', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        stop_id:   state.stop.id,
+        route_id:  pendingBus.route,
+        headsign:  pendingBus.headsign,
+        threshold,
+      })
+    });
+
+    document.getElementById('alert-banner').classList.add('active');
+    document.getElementById('alert-banner-title').textContent = `Route ${activeAlert.route} alert active`;
+    document.getElementById('alert-banner-sub').textContent = `Notifying at ${activeAlert.threshold} min`;
+    document.getElementById('modal-overlay').classList.remove('open');
+    pendingBus = null;
+    renderBuses(lastBuses);
+  }
+
+  async function cancelAlert() {
+    activeAlert = null;
+    await fetch('/api/alert', { method: 'DELETE' });
+    document.getElementById('alert-banner').classList.remove('active');
+    renderBuses(lastBuses);
+  }
+
   // ── Init ─────────────────────────────────────────────────────────────────
   loadRoutes();
 </script>
@@ -533,4 +734,6 @@ HTML = """
 
 if __name__ == "__main__":
     load_gtfs()
+    t = threading.Thread(target=alert_worker, daemon=True)
+    t.start()
     app.run(host="0.0.0.0", port=5001, debug=False)
