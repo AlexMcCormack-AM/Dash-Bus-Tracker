@@ -188,20 +188,22 @@ def api_buses():
 # ── SMS ──────────────────────────────────────────────────────────────────────
 
 def send_text(message):
-    print(f"send_text: RESEND_API_KEY={'set ('+RESEND_API_KEY[:8]+')' if RESEND_API_KEY else 'EMPTY'} SMS_GATEWAY='{SMS_GATEWAY}'")
-    if not RESEND_API_KEY or not SMS_GATEWAY:
+    resend_key = os.environ.get("RESEND_API_KEY", "")
+    sms_gateway = os.environ.get("SMS_GATEWAY", "")
+    print(f"send_text: RESEND_API_KEY={'set ('+resend_key[:8]+')' if resend_key else 'EMPTY'} SMS_GATEWAY='{sms_gateway}'")
+    if not resend_key or not sms_gateway:
         print(f"[SMS skipped — no credentials]: {message}")
         return
     try:
         resp = requests.post(
             "https://api.resend.com/emails",
             headers={
-                "Authorization": f"Bearer {RESEND_API_KEY}",
+                "Authorization": f"Bearer {resend_key}",
                 "Content-Type": "application/json",
             },
             json={
                 "from": "DASH Bus Tracker <onboarding@resend.dev>",
-                "to": [SMS_GATEWAY],
+                "to": [sms_gateway],
                 "subject": "Bus Alert",
                 "text": message,
             },
