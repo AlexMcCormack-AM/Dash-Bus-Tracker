@@ -191,6 +191,7 @@ def api_buses():
 # ── SMS ──────────────────────────────────────────────────────────────────────
 
 def send_text(message):
+    print(f"send_text called: GMAIL_USER='{GMAIL_USER}' SMS_GATEWAY='{SMS_GATEWAY}' APP_PW={'set' if GMAIL_APP_PASSWORD else 'empty'}")
     if not GMAIL_USER or not GMAIL_APP_PASSWORD or not SMS_GATEWAY:
         print(f"[SMS skipped — no credentials]: {message}")
         return
