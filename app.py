@@ -2,10 +2,8 @@ import time
 import io
 import csv
 import zipfile
-import smtplib
 import threading
 import requests
-from email.mime.text import MIMEText
 from flask import Flask, jsonify, render_template_string, request
 from google.transit import gtfs_realtime_pb2
 from dotenv import load_dotenv
@@ -16,10 +14,9 @@ load_dotenv()
 
 app = Flask(__name__)
 
-API_KEY    = os.getenv("SWIFTLY_API_KEY", "4af18b965e8a21f6015686f2f208f95f")
-SMS_GATEWAY       = os.getenv("SMS_GATEWAY", "")
-GMAIL_USER        = os.getenv("GMAIL_USER", "")
-GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD", "")
+API_KEY        = os.getenv("SWIFTLY_API_KEY", "4af18b965e8a21f6015686f2f208f95f")
+SMS_GATEWAY    = os.getenv("SMS_GATEWAY", "")
+RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
 
 # ── Active alert (one at a time) ─────────────────────────────────────────────
 _alert_lock = threading.Lock()
@@ -191,22 +188,27 @@ def api_buses():
 # ── SMS ──────────────────────────────────────────────────────────────────────
 
 def send_text(message):
-    print(f"send_text called: GMAIL_USER='{GMAIL_USER}' SMS_GATEWAY='{SMS_GATEWAY}' APP_PW={'set' if GMAIL_APP_PASSWORD else 'empty'}")
-    if not GMAIL_USER or not GMAIL_APP_PASSWORD or not SMS_GATEWAY:
+    if not RESEND_API_KEY or not SMS_GATEWAY:
         print(f"[SMS skipped — no credentials]: {message}")
         return
     try:
-        msg = MIMEText(message)
-        msg["From"] = GMAIL_USER
-        msg["To"] = SMS_GATEWAY
-        msg["Subject"] = ""
-        print(f"Connecting to Gmail SMTP...")
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-            print(f"Logging in...")
-            server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
-            print(f"Sending message...")
-            server.send_message(msg)
-        print(f"Text sent: {message}")
+        resp = requests.post(
+            "https://api.resend.com/emails",
+            headers={
+                "Authorization": f"Bearer {RESEND_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "from": "DASH Bus Tracker <onboarding@resend.dev>",
+                "to": [SMS_GATEWAY],
+                "subject": "Bus Alert",
+                "text": message,
+            },
+            timeout=10,
+        )
+        print(f"Resend response {resp.status_code}: {resp.text}")
+        if resp.status_code == 200:
+            print(f"Text sent: {message}")
     except Exception as e:
         import traceback
         print(f"SMS error: {e}")
