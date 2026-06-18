@@ -200,12 +200,17 @@ def send_text(message):
         msg["From"] = GMAIL_USER
         msg["To"] = SMS_GATEWAY
         msg["Subject"] = ""
+        print(f"Connecting to Gmail SMTP...")
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            print(f"Logging in...")
             server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
+            print(f"Sending message...")
             server.send_message(msg)
         print(f"Text sent: {message}")
     except Exception as e:
+        import traceback
         print(f"SMS error: {e}")
+        print(traceback.format_exc())
 
 
 # ── Alert endpoints ───────────────────────────────────────────────────────────
