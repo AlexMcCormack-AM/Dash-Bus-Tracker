@@ -188,6 +188,7 @@ def api_buses():
 # ── SMS ──────────────────────────────────────────────────────────────────────
 
 def send_text(message):
+    print(f"send_text: RESEND_API_KEY={'set ('+RESEND_API_KEY[:8]+')' if RESEND_API_KEY else 'EMPTY'} SMS_GATEWAY='{SMS_GATEWAY}'")
     if not RESEND_API_KEY or not SMS_GATEWAY:
         print(f"[SMS skipped — no credentials]: {message}")
         return
