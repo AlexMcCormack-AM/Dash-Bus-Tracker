@@ -246,7 +246,7 @@ def alert_worker():
                 buses = get_upcoming_buses(alert["stop_id"])
                 for bus in buses:
                     if bus["route"] == alert["route_id"] and bus["headsign"] == alert["headsign"]:
-                        if bus["mins"] <= alert["threshold"]:
+                        if bus["mins"] <= alert["threshold"] + 0.9:
                             stop_name = _stop_names.get(alert["stop_id"], alert["stop_id"])
                             send_text(f"Route {bus['route']} is {int(bus['mins'])} min away at {stop_name}")
                             with _alert_lock:
