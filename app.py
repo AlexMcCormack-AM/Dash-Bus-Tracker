@@ -14,7 +14,7 @@ load_dotenv()
 
 app = Flask(__name__)
 
-API_KEY        = os.getenv("SWIFTLY_API_KEY", "4af18b965e8a21f6015686f2f208f95f")
+API_KEY        = os.getenv("SWIFTLY_API_KEY", "")
 SMS_GATEWAY    = os.getenv("SMS_GATEWAY", "")
 RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
 

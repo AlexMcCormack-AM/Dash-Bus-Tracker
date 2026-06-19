@@ -9,12 +9,12 @@ import os
 load_dotenv()
 
 # Config
-API_KEY = os.getenv("SWIFTLY_API_KEY", "4af18b965e8a21f6015686f2f208f95f")
+API_KEY = os.getenv("SWIFTLY_API_KEY", "")
 STOP_ID = "413"  # S Royal St + Duke St
 STOP_NAME = "S Royal St + Duke St"
 ALERT_MINUTES = 10        # text when bus is this many minutes away
 POLL_INTERVAL = 60        # check every 60 seconds
-SMS_GATEWAY = os.getenv("SMS_GATEWAY", "5408099248@vtext.com")
+SMS_GATEWAY = os.getenv("SMS_GATEWAY", "")
 
 # Gmail config — fill these in .env
 GMAIL_USER = os.getenv("GMAIL_USER", "")
