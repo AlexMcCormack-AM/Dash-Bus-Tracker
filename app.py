@@ -1756,11 +1756,13 @@ if __name__ == "__main__":
     load_gtfs()
     t = threading.Thread(target=alert_worker, daemon=True)
     t.start()
-    # Railway sets PORT; treat its presence as "production" → no debugger / reloader.
+    # Railway sets PORT; use its presence only to gate the debugger/reloader.
+    # The Railway service routes to port 5001 (its configured target), so we
+    # always bind 5001 — that's the known-working production port.
     on_railway = "PORT" in os.environ
     app.run(
         host="0.0.0.0",
-        port=int(os.getenv("PORT", "5001")),
+        port=5001,
         debug=not on_railway,
         use_reloader=not on_railway,
     )
